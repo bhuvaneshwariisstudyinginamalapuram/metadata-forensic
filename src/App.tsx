@@ -1,10 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Shield, UploadCloud, FileText, AlertTriangle, 
   CheckCircle, Info, ChevronDown, ChevronUp, 
   Download, Activity, Database, FileDigit,
-  EyeOff, Search, Lock
+  EyeOff, Search, Lock, Cpu, Code, FileBox, Tag, History, HelpCircle
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -127,6 +127,22 @@ export default function App() {
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+  };
+
+  const downloadReport = () => {
+    if (!result) return;
+    
+    const reportContent = JSON.stringify(result, null, 2);
+    const blob = new Blob([reportContent], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `covert-analysis-${result.file_name}-${new Date().getTime()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -296,7 +312,7 @@ export default function App() {
                       </span>
                     </div>
                   </div>
-                  <button className="mt-6 w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium flex items-center justify-center gap-2 transition-colors border border-slate-700">
+                  <button onClick={downloadReport} className="mt-6 w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium flex items-center justify-center gap-2 transition-colors border border-slate-700">
                     <Download className="w-4 h-4" /> Download Report
                   </button>
                 </div>
@@ -488,19 +504,139 @@ function ProgressBar({ label, value, total, color }: { label: string, value: num
   );
 }
 
+function AnimatedNumber({ value, className }: { value: number | string, className?: string }) {
+  const [displayValue, setDisplayValue] = useState(0);
+  const numValue = typeof value === 'string' ? parseFloat(value) : value;
+
+  useEffect(() => {
+    let start = 0;
+    const end = numValue;
+    if (start === end) {
+      setDisplayValue(end);
+      return;
+    }
+    
+    let totalDuration = 1000;
+    let startTime: number | null = null;
+
+    const animate = (currentTime: number) => {
+      if (!startTime) startTime = currentTime;
+      const progress = Math.min((currentTime - startTime) / totalDuration, 1);
+      
+      // easeOutQuart
+      const easeProgress = 1 - Math.pow(1 - progress, 4);
+      
+      const current = start + (end - start) * easeProgress;
+      setDisplayValue(current);
+
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        setDisplayValue(end);
+      }
+    };
+
+    requestAnimationFrame(animate);
+  }, [numValue]);
+
+  const formattedValue = typeof value === 'string' && value.includes('.') 
+    ? displayValue.toFixed(2) 
+    : Math.round(displayValue);
+
+  return <span className={className}>{formattedValue}</span>;
+}
+
 function TechnicalDetails({ details }: { details: any }) {
   const [isOpen, setIsOpen] = useState(false);
+
+  const telemetryData = [
+    {
+      id: 'entropy',
+      label: 'Max Entropy Score',
+      value: details.entropyScore,
+      max: 8,
+      icon: <Cpu className="w-5 h-5 text-purple-400" />,
+      description: 'Measures randomness in data. Scores > 7.5 often indicate encryption or compression.',
+      color: parseFloat(details.entropyScore) > 7.5 ? 'text-red-400' : 'text-slate-200',
+      bg: 'bg-purple-500/10',
+      border: 'border-purple-500/20 hover:border-purple-500/50',
+      progressColor: 'bg-purple-500'
+    },
+    {
+      id: 'base64',
+      label: 'Base64 Blocks',
+      value: details.base64BlockCount,
+      max: 50,
+      icon: <Code className="w-5 h-5 text-amber-400" />,
+      description: 'Number of Base64 encoded text blocks found. Often used to hide payloads.',
+      color: details.base64BlockCount > 10 ? 'text-amber-400' : 'text-slate-200',
+      bg: 'bg-amber-500/10',
+      border: 'border-amber-500/20 hover:border-amber-500/50',
+      progressColor: 'bg-amber-500'
+    },
+    {
+      id: 'embedded',
+      label: 'Embedded Objects',
+      value: details.embeddedObjectCount,
+      max: 20,
+      icon: <FileBox className="w-5 h-5 text-blue-400" />,
+      description: 'Files or OLE objects embedded within the document.',
+      color: details.embeddedObjectCount > 0 ? 'text-blue-400' : 'text-slate-200',
+      bg: 'bg-blue-500/10',
+      border: 'border-blue-500/20 hover:border-blue-500/50',
+      progressColor: 'bg-blue-500'
+    },
+    {
+      id: 'metadata',
+      label: 'Metadata Fields',
+      value: details.metadataFieldsExtracted,
+      max: 100,
+      icon: <Tag className="w-5 h-5 text-emerald-400" />,
+      description: 'Number of metadata properties extracted from the file structure.',
+      color: 'text-slate-200',
+      bg: 'bg-emerald-500/10',
+      border: 'border-emerald-500/20 hover:border-emerald-500/50',
+      progressColor: 'bg-emerald-500'
+    },
+    {
+      id: 'revisions',
+      label: 'Revision Count',
+      value: details.revisionHistoryCount,
+      max: 200,
+      icon: <History className="w-5 h-5 text-pink-400" />,
+      description: 'Tracked changes, deletions, or insertions retained in the file.',
+      color: details.revisionHistoryCount > 0 ? 'text-pink-400' : 'text-slate-200',
+      bg: 'bg-pink-500/10',
+      border: 'border-pink-500/20 hover:border-pink-500/50',
+      progressColor: 'bg-pink-500'
+    }
+  ];
 
   return (
     <div className="bg-[#1e293b] rounded-2xl border border-slate-800 overflow-hidden shadow-xl">
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full p-6 flex items-center justify-between text-left hover:bg-slate-800/50 transition-colors"
+        className="w-full p-6 flex items-center justify-between text-left hover:bg-slate-800/50 transition-colors group"
       >
-        <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-          <Database className="w-4 h-4" /> Technical Telemetry
-        </h3>
-        {isOpen ? <ChevronUp className="w-5 h-5 text-slate-500" /> : <ChevronDown className="w-5 h-5 text-slate-500" />}
+        <div className="flex items-center gap-4">
+          <div className="p-2.5 bg-slate-800 rounded-xl group-hover:bg-slate-700 transition-colors border border-slate-700 group-hover:border-slate-600">
+            <Database className="w-5 h-5 text-blue-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
+              Technical Telemetry
+            </h3>
+            <p className="text-xs text-slate-500 mt-1 font-medium">Raw extraction metrics and heuristics</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="hidden sm:inline-flex items-center justify-center px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-xs font-mono text-slate-400">
+            {telemetryData.length} METRICS
+          </span>
+          <div className="p-1.5 rounded-lg bg-slate-800/50 group-hover:bg-slate-700 transition-colors">
+            {isOpen ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
+          </div>
+        </div>
       </button>
       
       <AnimatePresence>
@@ -511,25 +647,57 @@ function TechnicalDetails({ details }: { details: any }) {
             exit={{ height: 0, opacity: 0 }}
             className="border-t border-slate-800"
           >
-            <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-6">
-              <DetailItem label="Max Entropy Score" value={details.entropyScore} />
-              <DetailItem label="Base64 Blocks" value={details.base64BlockCount} />
-              <DetailItem label="Embedded Objects" value={details.embeddedObjectCount} />
-              <DetailItem label="Metadata Fields" value={details.metadataFieldsExtracted} />
-              <DetailItem label="Revision Count" value={details.revisionHistoryCount} />
+            <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {telemetryData.map((item, i) => {
+                const numValue = typeof item.value === 'string' ? parseFloat(item.value) : item.value;
+                const percentage = Math.min((numValue / item.max) * 100, 100);
+
+                return (
+                  <motion.div
+                    key={item.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.05 }}
+                    className={cn(
+                      "relative group/card p-5 rounded-xl border bg-slate-800/30 hover:bg-slate-800/80 transition-all duration-300",
+                      "hover:shadow-lg hover:-translate-y-1 flex flex-col justify-between",
+                      item.border
+                    )}
+                  >
+                    <div>
+                      <div className="flex items-start justify-between mb-4">
+                        <div className={cn("p-2.5 rounded-lg border border-white/5", item.bg)}>
+                          {item.icon}
+                        </div>
+                        <div className="group/tooltip relative">
+                          <HelpCircle className="w-4 h-4 text-slate-600 hover:text-slate-400 cursor-help transition-colors" />
+                          <div className="absolute bottom-full right-0 mb-2 w-56 p-3 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-300 opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-10 shadow-2xl leading-relaxed">
+                            {item.description}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wider mb-1.5 font-semibold">{item.label}</div>
+                      <div className="flex items-baseline gap-2 mb-4">
+                        <AnimatedNumber value={item.value} className={cn("text-3xl font-mono font-bold tracking-tight", item.color)} />
+                        <span className="text-xs font-mono text-slate-600">/ {item.max}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="h-1.5 w-full bg-slate-900 rounded-full overflow-hidden mt-auto">
+                      <motion.div 
+                        className={cn("h-full rounded-full", item.progressColor)}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${percentage}%` }}
+                        transition={{ duration: 1, delay: 0.2 + (i * 0.1) }}
+                      />
+                    </div>
+                  </motion.div>
+                );
+              })}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
-  );
-}
-
-function DetailItem({ label, value }: { label: string, value: string | number }) {
-  return (
-    <div>
-      <div className="text-xs text-slate-500 uppercase tracking-wider mb-1">{label}</div>
-      <div className="text-lg font-mono text-slate-200">{value}</div>
     </div>
   );
 }

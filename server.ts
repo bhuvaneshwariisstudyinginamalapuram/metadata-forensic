@@ -4,7 +4,13 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
-import * as pdfParse from "pdf-parse";
+import { createRequire } from "module";
+import { GoogleGenAI, Type } from "@google/genai";
+
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const app = express();
 const PORT = 3000;
@@ -270,30 +276,74 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
     const base64EntropyScore = parseFloat(details.entropyScore);
     const metadataAnomalyScore = breakdown.metadata_score;
 
-    let riskScore = (hiddenRatio * 0.5) + (embeddedPresence * 20) + (base64EntropyScore * 0.2) + (metadataAnomalyScore * 0.1);
+    // Use Gemini to analyze the findings and generate a risk score and verdict
+    const prompt = `Analyze the following document telemetry and findings to determine the risk of covert data transmission or hidden payloads.
     
-    // Add some baseline risk if there are any findings
-    if (analysis.findings.length > 0 && riskScore < 10) {
-      riskScore += 15;
-    }
+    File Name: ${file.originalname}
+    File Size: ${file.size} bytes
+    Hidden Bytes: ${analysis.hiddenBytes} bytes
+    Hidden Ratio: ${hiddenRatio.toFixed(2)}%
+    Embedded Objects: ${details.embeddedObjectCount}
+    Base64 Blocks: ${details.base64BlockCount}
+    Max Entropy Score: ${details.entropyScore}
+    Metadata Anomalies: ${metadataAnomalyScore}
+    Findings: ${analysis.findings.join(", ")}
     
-    riskScore = Math.min(Math.max(riskScore, 0), 100);
+    Provide a JSON response with the following structure:
+    {
+      "riskScore": number (0-100, where 100 is highest risk),
+      "riskLevel": string ("LOW", "MEDIUM", "HIGH"),
+      "confidence": number (0-100, how confident you are in this assessment),
+      "verdict": string (A professional, 2-3 sentence forensic verdict summarizing the risk and findings)
+    }`;
 
-    let riskLevel = "LOW";
-    if (riskScore >= 70) riskLevel = "HIGH";
-    else if (riskScore >= 30) riskLevel = "MEDIUM";
+    let aiResult = {
+      riskScore: 0,
+      riskLevel: "LOW",
+      confidence: 85,
+      verdict: "The document appears clean with minimal to no hidden data. No significant anomalies detected. Standard handling procedures apply."
+    };
 
-    // Confidence heuristic
-    const confidence = Math.min(80 + (analysis.findings.length * 5), 99);
-
-    // AI Verdict
-    let verdict = "";
-    if (riskLevel === "HIGH") {
-      verdict = `The document contains a significant volume of concealed data representing ${hiddenRatio.toFixed(1)}% of total file size. Embedded binary objects and high-entropy encoded segments strongly indicate potential covert data transmission. Manual forensic review recommended.`;
-    } else if (riskLevel === "MEDIUM") {
-      verdict = `The document contains moderate indicators of hidden data (${hiddenRatio.toFixed(1)}% of total file size). Some anomalies detected such as comments or metadata irregularities. Proceed with caution.`;
-    } else {
-      verdict = `The document appears clean with minimal to no hidden data (${hiddenRatio.toFixed(1)}% of total file size). No significant anomalies detected. Standard handling procedures apply.`;
+    try {
+      const geminiResponse = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              riskScore: { type: Type.NUMBER },
+              riskLevel: { type: Type.STRING },
+              confidence: { type: Type.NUMBER },
+              verdict: { type: Type.STRING }
+            },
+            required: ["riskScore", "riskLevel", "confidence", "verdict"]
+          }
+        }
+      });
+      
+      const parsed = JSON.parse(geminiResponse.text || "{}");
+      if (parsed.riskScore !== undefined) aiResult = parsed;
+    } catch (e) {
+      console.error("Gemini API error, falling back to heuristic scoring", e);
+      // Fallback heuristic scoring
+      let riskScore = (hiddenRatio * 2) + (embeddedPresence * 20) + (base64EntropyScore * 2) + (metadataAnomalyScore * 0.1);
+      if (analysis.findings.length > 0 && riskScore < 10) riskScore += 15;
+      riskScore = Math.min(Math.max(riskScore, 0), 100);
+      let riskLevel = "LOW";
+      if (riskScore >= 70) riskLevel = "HIGH";
+      else if (riskScore >= 30) riskLevel = "MEDIUM";
+      const confidence = Math.min(80 + (analysis.findings.length * 5), 99);
+      let verdict = "";
+      if (riskLevel === "HIGH") {
+        verdict = `The document contains a significant volume of concealed data representing ${hiddenRatio.toFixed(1)}% of total file size. Embedded binary objects and high-entropy encoded segments strongly indicate potential covert data transmission. Manual forensic review recommended.`;
+      } else if (riskLevel === "MEDIUM") {
+        verdict = `The document contains moderate indicators of hidden data (${hiddenRatio.toFixed(1)}% of total file size). Some anomalies detected such as comments or metadata irregularities. Proceed with caution.`;
+      } else {
+        verdict = `The document appears clean with minimal to no hidden data (${hiddenRatio.toFixed(1)}% of total file size). No significant anomalies detected. Standard handling procedures apply.`;
+      }
+      aiResult = { riskScore, riskLevel, confidence, verdict };
     }
 
     const response = {
@@ -301,13 +351,13 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
       file_size: file.size,
       hidden_bytes: analysis.hiddenBytes,
       hidden_ratio: hiddenRatio,
-      risk_score: riskScore,
-      risk_level: riskLevel,
-      confidence: confidence,
+      risk_score: aiResult.riskScore,
+      risk_level: aiResult.riskLevel,
+      confidence: aiResult.confidence,
       breakdown: analysis.breakdown,
       findings: analysis.findings,
       details: analysis.details,
-      verdict: verdict,
+      verdict: aiResult.verdict,
       timestamp: new Date().toISOString()
     };
 
